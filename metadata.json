@@ -1,0 +1,5 @@
+{
+  "name": "NHL 92 Sprite Viewer",
+  "description": "A web-based viewer for Sega Genesis NHL Hockey Sprites.anim files. Extracts, decodes, and animates sprite data directly in the browser.",
+  "requestFramePermissions": []
+}
