@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { parseSpritesAnim, parsePaletteText } from './services/parser';
 import { SpriteViewer } from './components/SpriteViewer';
@@ -5,7 +6,9 @@ import { ParsedData, AnimationStep } from './types';
 import { ANIMATION_DATA } from './data/animations';
 import { PALETTE_TEXT } from './constants';
 import { generateAseprite, generateAsepriteFromRange } from './services/aseprite';
-import { ArrowLeft, ArrowRight, Play, Square, Upload, ZoomIn, ZoomOut, Compass, Eye, List, RotateCcw, Search, X, Download, Palette } from 'lucide-react';
+import { renderTileToCanvas } from './services/renderer';
+import { ZipBuilder } from './services/zip';
+import { ArrowLeft, ArrowRight, Play, Square, Upload, ZoomIn, ZoomOut, Compass, Eye, List, RotateCcw, Search, X, Download, Palette, Grid } from 'lucide-react';
 
 const App: React.FC = () => {
   const [data, setData] = useState<ParsedData | null>(null);
@@ -15,6 +18,7 @@ const App: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [bgColor, setBgColor] = useState('#90FCFC'); // Default to NHL 92 Ice Color (0xEE8 -> RGB 144,252,252)
   const [isExporting, setIsExporting] = useState(false);
+  const [isExportingTiles, setIsExportingTiles] = useState(false);
   const [paletteText, setPaletteText] = useState(PALETTE_TEXT);
 
   // Mode: 'raw' for inspecting frames manually, 'anim' for playing predefined animations
@@ -145,6 +149,80 @@ const App: React.FC = () => {
       setError("Failed to generate Aseprite file");
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleExportTiles = async () => {
+    if (!data) return;
+    try {
+      setIsExportingTiles(true);
+      const start = exportStartFrame - 1;
+      const end = exportEndFrame - 1;
+      
+      // Collect unique (tileIndex, paletteLine) pairs used in the selected frames
+      const uniqueTiles = new Set<string>();
+      for (let i = start; i <= end; i++) {
+        const frame = data.frames[i];
+        if (!frame) continue;
+        frame.sprites.forEach(sprite => {
+          for (let col = 0; col < sprite.w; col++) {
+            for (let row = 0; row < sprite.h; row++) {
+              const tIdx = sprite.tile + col * sprite.h + row;
+              uniqueTiles.add(`${tIdx}:${sprite.pal}`);
+            }
+          }
+        });
+      }
+
+      if (uniqueTiles.size === 0) {
+        throw new Error("No tiles found in this frame range.");
+      }
+
+      const zip = new ZipBuilder();
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error("Could not get 2D context");
+
+      // Convert each unique tile to a PNG blob and add to ZIP
+      const tilePromises = Array.from(uniqueTiles).map(async (key) => {
+        const [tIdxStr, pLineStr] = key.split(':');
+        const tIdx = parseInt(tIdxStr);
+        const pLine = parseInt(pLineStr);
+        
+        renderTileToCanvas(ctx, tIdx, pLine, data.tileData, data.tileCount, data.palettes, 1);
+        
+        return new Promise<void>((resolve) => {
+          canvas.toBlob((blob) => {
+            if (blob) {
+              blob.arrayBuffer().then(buffer => {
+                zip.addFile(`tile_${tIdx.toString().padStart(5, '0')}_pal${pLine}.png`, new Uint8Array(buffer));
+                resolve();
+              });
+            } else {
+              resolve();
+            }
+          }, 'image/png');
+        });
+      });
+
+      await Promise.all(tilePromises);
+      
+      const finalZip = zip.build();
+      const blob = new Blob([finalZip], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `tiles_frames_${exportStartFrame}-${exportEndFrame}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+    } catch (e) {
+      console.error(e);
+      setError(e instanceof Error ? e.message : "Failed to export tiles");
+    } finally {
+      setIsExportingTiles(false);
     }
   };
 
@@ -713,7 +791,7 @@ const App: React.FC = () => {
               {viewMode === 'raw' && (
                 <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
                     <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 border-b border-gray-800 pb-2">
-                      Export Frames
+                      Export Resources
                     </h3>
                     <div className="space-y-4">
                       <div className="flex items-center gap-2">
@@ -742,18 +820,33 @@ const App: React.FC = () => {
                          </div>
                       </div>
                       
-                      <button 
-                        onClick={handleExportRawAseprite}
-                        disabled={isExporting}
-                        className="w-full flex items-center justify-center gap-2 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded-md transition-colors shadow-sm"
-                      >
-                        {isExporting ? (
-                          <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin"></div>
-                        ) : (
-                          <Download size={16} />
-                        )}
-                        <span>Export Range</span>
-                      </button>
+                      <div className="grid grid-cols-1 gap-2">
+                        <button 
+                          onClick={handleExportRawAseprite}
+                          disabled={isExporting}
+                          className="w-full flex items-center justify-center gap-2 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded-md transition-colors shadow-sm text-sm"
+                        >
+                          {isExporting ? (
+                            <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin"></div>
+                          ) : (
+                            <Download size={16} />
+                          )}
+                          <span>Export .aseprite</span>
+                        </button>
+
+                        <button 
+                          onClick={handleExportTiles}
+                          disabled={isExportingTiles}
+                          className="w-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded-md transition-colors border border-gray-700 shadow-sm text-sm"
+                        >
+                          {isExportingTiles ? (
+                            <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin"></div>
+                          ) : (
+                            <Grid size={16} />
+                          )}
+                          <span>Export Tiles (ZIP)</span>
+                        </button>
+                      </div>
                     </div>
                 </div>
               )}

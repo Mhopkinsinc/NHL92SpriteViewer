@@ -1,3 +1,4 @@
+
 import { Frame, RenderingContext, Sprite } from '../types';
 
 // Decode a single 8x8 tile (4bpp) into a linear array of color indices (0-15)
@@ -222,4 +223,50 @@ export const renderFrameToCanvas = (
   ctx.moveTo(cx, cy - chSize);
   ctx.lineTo(cx, cy + chSize);
   ctx.stroke();
+};
+
+/**
+ * Renders a single 8x8 tile to a canvas context at the specified scale.
+ */
+export const renderTileToCanvas = (
+  ctx: CanvasRenderingContext2D,
+  tileIndex: number,
+  paletteLine: number,
+  tileData: Uint8Array,
+  tileCount: number,
+  palettes: number[][][],
+  scale: number = 1
+) => {
+  if (tileIndex < 0 || tileIndex >= tileCount) return;
+
+  const tileOffset = tileIndex * 32;
+  if (tileOffset + 32 > tileData.length) return;
+
+  const tilePixels = decodeTile(tileData, tileOffset);
+  const palette = palettes[paletteLine];
+
+  ctx.canvas.width = 8 * scale;
+  ctx.canvas.height = 8 * scale;
+  const imgData = ctx.createImageData(ctx.canvas.width, ctx.canvas.height);
+  const pixels = imgData.data;
+
+  for (let py = 0; py < 8; py++) {
+    for (let px = 0; px < 8; px++) {
+      const colorIdx = tilePixels[py * 8 + px];
+      const color = palette[colorIdx] || [0, 0, 0, 0];
+
+      for (let sy = 0; sy < scale; sy++) {
+        for (let sx = 0; sx < scale; sx++) {
+          const finalX = px * scale + sx;
+          const finalY = py * scale + sy;
+          const idx = (finalY * ctx.canvas.width + finalX) * 4;
+          pixels[idx] = color[0];
+          pixels[idx + 1] = color[1];
+          pixels[idx + 2] = color[2];
+          pixels[idx + 3] = color[3];
+        }
+      }
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
 };
